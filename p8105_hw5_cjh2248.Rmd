@@ -8,6 +8,7 @@ date: "2024-11-09"
 library(tidyverse)
 library(rvest)
 library(dplyr)
+library(broom)
 ```
 
 ## Problem 1 
@@ -38,10 +39,84 @@ ggplot(birthdays_df, aes(x = group_size, y = probability)) +
   geom_line() +
   labs(x = "Sample Size", y = "Probability of Same Birthday") +
   ggtitle("Problem #1: Birthdays") 
-
 ```
 
 
 This plot indicates that as the sample size increases, the probability of two people sharing the same birthday increases. For example, if the group has about 25 people, we can observe that there is over 50% chance that two people will have the same birthday. 
 
+## Problem 2 
 
+```{r}
+n <- 30
+sigma <- 5
+mu_values <- c(0, 1, 2, 3, 4, 5, 6)
+n_sims <- 5000
+```
+
+```{r}
+simulate_ttest <- function(mu = 0) {
+  data <- tibble(x = rnorm(n, mean = mu, sd = sigma))
+  ttest_result <- t.test(x~ 1, data = data)
+  tidy(ttest_result) %>% 
+    select(estimate, p.value) %>%
+    mutate(mu = mu)
+}
+```
+
+```{r}
+results_list <- map(mu_values, function(mu) {
+  replicate(n_sims, simulate_ttest(mu), simplify = FALSE)
+})
+```
+
+```{r}
+results_list <- lapply(results_list, as.data.frame)
+```
+
+```{r}
+results_df <- results_list %>%
+  map_dfr(~ .x, .id = "mu") %>%
+  mutate(mu = as.numeric(mu),
+         rejected = p.value < 0.05)
+```
+
+```{r}
+power_df <- results_df %>%
+  group_by(mu) %>%
+  summarize(power = mean(rejected, na.rm = TRUE), .groups = "drop")
+```
+
+## Is this plot right? 
+```{r}
+ggplot(power_df, aes(x = mu, y = power)) +
+  geom_point() +
+  geom_line() +
+  labs(x = "Mu", y = "Power") 
+```
+
+From our analysis, we can observe that as the effect size increases, the power of the test also increases. This means that as the true mean moves further away from the hypothesis, the sample will also be further from null value. Therefore, this indicates that we will reject the null hypothesis. 
+
+```{r}
+average_estimates <- results_df %>% 
+  group_by(mu) %>% 
+  summarize(avg_estimate_all = mean(estimate),
+            avg_estimate_rejected = mean(estimate[rejected]))
+```
+
+```{r}
+ggplot(average_estimates, aes(x = mu)) +
+  geom_point(aes(y = avg_estimate_all, color = "All Tests")) +
+  geom_point(aes(y = avg_estimate_rejected, color = "Rejected Tests")) +
+  labs(x = "True Mu", y = "Average Estimate", color = "Test Type")
+```
+```{r}
+ggplot(results_df, aes(x = mu, y = estimate)) +
+  geom_point(alpha = 0.5) +
+  stat_summary(fun = "mean", geom = "point", color = "red", size = 3) +
+  labs(x = "True Value of Mu",
+       y = "Average Estimate of Mu_hat",
+       title = "Average Mu_hat vs. True Mu")  
+```
+
+This graph depicts average estimate of 𝜇̂ 
+ 
