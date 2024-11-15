@@ -9,6 +9,9 @@ library(tidyverse)
 library(rvest)
 library(dplyr)
 library(broom)
+library(purrr)
+library(ggplot2)
+library(knitr)
 ```
 
 ## Problem 1 
@@ -86,7 +89,7 @@ power_df <- results_df %>%
   summarize(power = mean(rejected, na.rm = TRUE), .groups = "drop")
 ```
 
-## Is this plot right? 
+## Plot 1 
 ```{r}
 ggplot(power_df, aes(x = mu, y = power)) +
   geom_point() +
@@ -99,24 +102,104 @@ From our analysis, we can observe that as the effect size increases, the power o
 ```{r}
 average_estimates <- results_df %>% 
   group_by(mu) %>% 
-  summarize(avg_estimate_all = mean(estimate),
-            avg_estimate_rejected = mean(estimate[rejected]))
+  summarize(avg_estimate = mean(estimate))
+
+rejected_estimates <- results_df %>% 
+  filter(p.value < 0.05, mu >= 0, mu <= 6) %>%  
+  group_by(mu) %>% 
+  summarize(avg_estimate_rejected = mean(estimate))
+
+combined_estimates <- left_join(average_estimates, rejected_estimates, by = "mu")
 ```
 
+
+## Plot 2: Combined All Tests & Rejected 
 ```{r}
-ggplot(average_estimates, aes(x = mu)) +
-  geom_point(aes(y = avg_estimate_all, color = "All Tests")) +
-  geom_point(aes(y = avg_estimate_rejected, color = "Rejected Tests")) +
-  labs(x = "True Mu", y = "Average Estimate", color = "Test Type")
+ggplot(combined_estimates, aes(x = mu)) +
+  geom_point(aes(y = avg_estimate, color = "All")) +
+  geom_point(aes(y = avg_estimate_rejected, color = "Rejected")) + 
+  geom_line(aes(y = avg_estimate, color = "All"), na.rm = TRUE) + 
+  geom_line(aes(y = avg_estimate_rejected, color = "Rejected"), na.rm = TRUE) +  
+  labs(x = "Mu", y = "Average Estimate", color = "Test Type")
 ```
+
+This plot depicts two lines: the red line represents the  average estimate of 𝜇̂ (y)  and the value of 𝜇(x). The blue line represents  the average estimate of 𝜇̂ in  which the null was rejected (y) and the value of 𝜇 (x).From this plot we can observe that all tests runs continuously upward (overlapping the rejected line). However, the rejected showcases avg estimate further away from zero. 
+
+## Plot 3: Average Mu_hat vs. True Mu 
 ```{r}
-ggplot(results_df, aes(x = mu, y = estimate)) +
+ggplot(average_estimates, aes(x = mu, y = avg_estimate)) +
   geom_point(alpha = 0.5) +
   stat_summary(fun = "mean", geom = "point", color = "red", size = 3) +
+  geom_path() +
   labs(x = "True Value of Mu",
        y = "Average Estimate of Mu_hat",
-       title = "Average Mu_hat vs. True Mu")  
+       title = "Average Mu_hat vs. True Mu")
 ```
 
-This graph depicts average estimate of 𝜇̂ 
- 
+This graph depicts average estimate of 𝜇̂ over 𝜇. 
+
+## Problem 3 
+
+Extracting the data. Making the city_state variable. To describe the raw data, we can see that there are a lot of homicides spanning across the US and a big discrepancy between closed/open cases with no arrest vs arrest. 
+
+```{r}
+homicide_df <- read.csv("data/homicide-data.csv")
+
+city_summary <- homicide_df %>% 
+  mutate(city_state = paste(city, state, sep = ", ")) %>% 
+  group_by(city_state) %>% 
+  summarize(
+    total_homicides = n(),
+    unsolved_homicides = sum(disposition %in% c("Closed without arrest", "Open/No arrest"))
+  )
+```
+
+Let's examine Baltimore. 
+
+```{r}
+baltimore_test <- prop.test(
+  x = city_summary %>% filter(city_state == "Baltimore, MD") %>% pull(unsolved_homicides),
+  n = city_summary %>% filter(city_state == "Baltimore, MD") %>% pull(total_homicides)
+)
+
+baltimore_tidy <- broom::tidy(baltimore_test) %>% 
+  select(estimate, conf.low, conf.high)
+```
+
+
+```{r}
+city_props <- city_summary %>% 
+  mutate(
+    prop_test_results = map2(unsolved_homicides, total_homicides, ~prop.test(.x, .y))
+  ) %>% 
+  mutate(tidy_results = map(prop_test_results, broom::tidy)) %>% 
+  unnest(tidy_results) %>% 
+  select(city_state, estimate, conf.low, conf.high)
+```
+
+## Table of Findings for Each City 
+
+```{r}
+city_props %>%
+  mutate(
+    estimate = round(estimate, 3),
+    conf.low = round(conf.low, 3),
+    conf.high = round(conf.high, 3)
+  ) %>%
+  select(city_state, estimate, conf.low, conf.high) %>%
+  kable(
+    col.names = c("City,State", "Estimated Proportion", "Lower Confidence Interval", "Upper Confidence Interval"),
+    caption = "Proportion of Unsolved Homicides by City/State"
+  )
+```
+
+```{r}
+city_props %>% 
+  mutate(city_state = fct_reorder(city_state, estimate)) %>% 
+  ggplot(aes(x = city_state, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) +
+  labs(x = "City/ State", y = "Proportion of Unsolved Homicides") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
